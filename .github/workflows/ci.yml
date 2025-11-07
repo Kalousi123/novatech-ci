@@ -113,11 +113,14 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Send Slack notification (if configured)
-        if: secrets.SLACK_WEBHOOK != ''
+      - name: Send Slack notification (optional)
         run: |
-          STATUS="${{ job.status }}"
-          PAYLOAD=$(jq -n \
-            --arg text "CI | Repo: $GITHUB_REPOSITORY | Ref: $GITHUB_REF | Run: $GITHUB_RUN_NUMBER | Status: $STATUS" \
-            '{text: $text}')
-          curl -s -X POST -H 'Content-type: application/json' --data "$PAYLOAD" ${{ secrets.SLACK_WEBHOOK }}
+          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            STATUS="${{ job.status }}"
+            PAYLOAD=$(jq -n \
+              --arg text "CI | Repo: $GITHUB_REPOSITORY | Ref: $GITHUB_REF | Run: $GITHUB_RUN_NUMBER | Status: $STATUS" \
+              '{text: $text}')
+            curl -s -X POST -H 'Content-type: application/json' --data "$PAYLOAD" ${{ secrets.SLACK_WEBHOOK }}
+          else
+            echo "No Slack webhook configured, skipping notification."
+          fi
