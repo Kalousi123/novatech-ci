@@ -1,0 +1,123 @@
+name: CI Pipeline - NovaTech
+
+on:
+  push:
+    branches: [ "main", "develop", "**/feature/**" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.cache-deps.outputs.cache-hit }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Cache node modules
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+
+  lint:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run linter
+        run: npm run lint
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install
+        run: npm ci
+      - name: Run unit tests (with coverage)
+        run: npm test -- --coverage
+      - name: Upload coverage artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage
+
+  build-and-scan-image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU and Docker Buildx
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker registry (only on main)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Docker image (tag by sha)
+        run: |
+          IMAGE="${{ secrets.DOCKER_REGISTRY }}/novatech/${{ github.repository }}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v1
+        with:
+          image-ref: ${{ secrets.DOCKER_REGISTRY }}/novatech/${{ github.repository }}:${{ github.sha }}
+          format: 'table'
+          exit-code: '1'
+          scan-type: 'image'
+          timeout: '10m'
+
+      - name: Push image (only on main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          SOURCE="${{ secrets.DOCKER_REGISTRY }}/novatech/${{ github.repository }}:${{ github.sha }}"
+          TARGET="${{ secrets.DOCKER_REGISTRY }}/novatech/${{ github.repository }}:latest"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
+
+  notify:
+    needs: [build-and-scan-image]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send Slack notification (if configured)
+        if: secrets.SLACK_WEBHOOK != ''
+        run: |
+          STATUS="${{ job.status }}"
+          PAYLOAD=$(jq -n \
+            --arg text "CI | Repo: $GITHUB_REPOSITORY | Ref: $GITHUB_REF | Run: $GITHUB_RUN_NUMBER | Status: $STATUS" \
+            '{text: $text}')
+          curl -s -X POST -H 'Content-type: application/json' --data "$PAYLOAD" ${{ secrets.SLACK_WEBHOOK }}
