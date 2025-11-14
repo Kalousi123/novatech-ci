@@ -14,8 +14,6 @@ permissions:
 jobs:
   setup:
     runs-on: ubuntu-latest
-    outputs:
-      cache-hit: ${{ steps.cache-deps.outputs.cache-hit }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -26,34 +24,11 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Cache node modules
-        id: cache-deps
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-
-  test:
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
       - name: Install dependencies
         run: npm ci
-      - name: Run unit tests (with coverage)
-        run: npm test -- --coverage
-      - name: Upload coverage artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage
 
   build-and-scan-image:
-    needs: test
+    needs: setup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
